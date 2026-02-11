@@ -216,6 +216,9 @@ class MainWindow(FluentWindow):
         settings_layout.addWidget(BodyLabel("配置文件", settings_card), 1, 0)
         settings_layout.addWidget(BodyLabel(str(self.config_path()), settings_card), 1, 1, 1, 2)
 
+        settings_layout.addWidget(BodyLabel("作者", settings_card), 2, 0)
+        settings_layout.addWidget(BodyLabel("localhosts-A", settings_card), 2, 1, 1, 2)
+
         layout.addWidget(settings_card, 2, 0, 1, 4)
 
         return page
