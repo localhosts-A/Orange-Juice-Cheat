@@ -1,0 +1,54 @@
+{
+  "process_name": "100orange.exe",
+  "module_name": "100orange.exe",
+  "base_offset": "0x15D6888",
+  "fields": {
+    "dice": "0x437C",
+    "round_count": "0x41A8",
+    "attack_dice_left": "0x487C",
+    "attack_dice_right": "0x4880"
+  },
+  "module_fields": {
+    "common_star": "0x15D6908",
+    "common_orange": "0x15D8DFC"
+  },
+  "pointer_chains": {
+    "player_hp": ["0x70", "0x8"],
+    "player_win": ["0x70", "0x3C8"],
+    "player_star": ["0x70", "0x3C4"],
+    "player2_star": ["0x70", "0xF64"]
+  },
+  "hp_stride": "0xF50",
+  "win_stride": "0xF50",
+  "star_stride": "0xF50",
+  "double_write": {
+    "player_star": ["0x70", "0x14"],
+    "player2_star": ["0x70", "0x1314"]
+  },
+  "double_write_fields": {
+    "dice": ["0x421C"]
+  },
+  "name_ranges": {
+    "player_name": {
+      "chain": ["0x70"],
+      "start": "0x140",
+      "end": "0x14F"
+    },
+    "player2_name": {
+      "chain": ["0x70"],
+      "start": "0x1090",
+      "end": "0x109F"
+    },
+    "player3_name": {
+      "chain": ["0x70"],
+      "start": "0x1FE0",
+      "end": "0x1FEF"
+    },
+    "player4_name": {
+      "chain": ["0x70"],
+      "start": "0x2F30",
+      "end": "0x2F3F"
+    }
+  },
+  "poll_interval_ms": 300
+}
