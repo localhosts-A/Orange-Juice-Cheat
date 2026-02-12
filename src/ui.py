@@ -5,7 +5,14 @@ from typing import Dict
 
 from PySide6.QtCore import Qt, QTimer, Slot
 from PySide6.QtGui import QIntValidator
-from PySide6.QtWidgets import QWidget, QGridLayout, QFrame, QMessageBox
+from PySide6.QtWidgets import (
+    QWidget,
+    QGridLayout,
+    QVBoxLayout,
+    QFrame,
+    QMessageBox,
+    QSizePolicy,
+)
 from qfluentwidgets import (
     FluentWindow,
     FluentIcon as FIF,
@@ -21,18 +28,23 @@ from qfluentwidgets import (
     ScrollArea,
     SmoothScroll,
     SmoothMode,
+    ComboBox,
+    Dialog,
 )
 
 from .config import AppConfig
+from .i18n import I18n
 from .memory import ProcessMemory
 
 
 @dataclass
 class FieldWidgets:
+    label_key: str
     label: BodyLabel
     edit: LineEdit
     write_button: PushButton
     lock_button: PushButton
+    configured: bool
 
 
 class MainWindow(FluentWindow):
@@ -40,10 +52,46 @@ class MainWindow(FluentWindow):
         super().__init__()
         self.config = config
         self.memory = memory
+        self.i18n = I18n.load(self.config.language)
+        self._applying_language = False
+        self._status_state: str = "detached"  # detached | waiting | detected
+        self._current_round: int = 0
+
         self._field_widgets: Dict[str, FieldWidgets] = {}
         self._name_edits: Dict[str, LineEdit] = {}
+        self._player_title_labels: Dict[int, BodyLabel] = {}
 
-        self.setWindowTitle("100%鲜橙汁修改器")
+        # 页面上需要动态翻译刷新的控件引用
+        self.home_title_label: TitleLabel | None = None
+        self.home_subtitle_label: SubtitleLabel | None = None
+        self.common_section_label: BodyLabel | None = None
+        self.match_section_label: BodyLabel | None = None
+        self.players_section_label: BodyLabel | None = None
+        self.tips_section_label: BodyLabel | None = None
+        self.tips_body_label: BodyLabel | None = None
+
+        self.settings_title_label: TitleLabel | None = None
+        self.settings_subtitle_label: SubtitleLabel | None = None
+        self.settings_poll_label: BodyLabel | None = None
+        self.settings_language_label: BodyLabel | None = None
+        self.settings_config_file_label: BodyLabel | None = None
+        self.settings_author_label: BodyLabel | None = None
+
+        # 语言选项与下拉框索引的稳定映射（避免依赖 ComboBox.currentData 的兼容性问题）
+        self._language_codes: list[str] = ["zh-CN", "en-US"]
+
+        # 设置自动保存（防抖）
+        self._settings_autosave_timer = QTimer(self)
+        self._settings_autosave_timer.setSingleShot(True)
+        self._settings_autosave_timer.setInterval(450)
+        self._settings_autosave_timer.timeout.connect(self._auto_save_settings)
+        self._last_saved_poll_interval_ms: int = int(self.config.poll_interval_ms)
+
+        # 导航项引用（不同版本 addSubInterface 返回值可能不同，用于实时更新侧边栏文字）
+        self._nav_home_item = None
+        self._nav_settings_item = None
+
+        self.setWindowTitle(self._t("app.window_title"))
         self.resize(980, 700)
 
         self._build_ui()
@@ -63,29 +111,32 @@ class MainWindow(FluentWindow):
         layout.setHorizontalSpacing(16)
         layout.setVerticalSpacing(12)
 
-        title = TitleLabel("100%鲜橙汁专用修改器", page)
-        subtitle = SubtitleLabel("仅用于单人模式，不对封号负责", page)
-        layout.addWidget(title, 0, 0, 1, 4)
-        layout.addWidget(subtitle, 1, 0, 1, 4)
+        self.home_title_label = TitleLabel(self._t("home.title"), page)
+        self.home_subtitle_label = SubtitleLabel(self._t("home.subtitle"), page)
+        layout.addWidget(self.home_title_label, 0, 0, 1, 4)
+        layout.addWidget(self.home_subtitle_label, 1, 0, 1, 4)
 
-        self.status_label = BodyLabel("状态：未附加", page)
+        self.status_label = BodyLabel(self._t("status.detached"), page)
         self.status_label.setStyleSheet("color: #cf000f;")
         layout.addWidget(self.status_label, 2, 0, 1, 2)
 
         header_card = CardWidget(page)
         header_layout = QGridLayout(header_card)
-        header_layout.setContentsMargins(8, 8, 8, 8)
+        # 与下方各 CardWidget 保持一致的内边距，避免顶部“当前回合”区域显得太贴边
+        header_layout.setContentsMargins(16, 16, 16, 16)
         header_layout.setHorizontalSpacing(8)
         header_layout.setColumnStretch(0, 1)
         header_layout.setColumnStretch(1, 1)
+        header_layout.setColumnStretch(2, 0)
+        header_layout.setColumnStretch(3, 0)
 
-        self.round_label = BodyLabel("当前回合：第0回合", header_card)
+        self.round_label = BodyLabel(self._t("round.label", round=0), header_card)
         header_layout.addWidget(self.round_label, 0, 0, 1, 2)
-        self.refresh_button = PushButton("刷新", header_card)
+        self.refresh_button = PushButton(self._t("button.refresh"), header_card)
         self.refresh_button.clicked.connect(self.refresh_values)
         header_layout.addWidget(self.refresh_button, 0, 2, alignment=Qt.AlignRight | Qt.AlignBottom)
 
-        self.kill_button = PushButton("关闭", header_card)
+        self.kill_button = PushButton(self._t("button.close"), header_card)
         self.kill_button.clicked.connect(self._confirm_kill_process)
         header_layout.addWidget(self.kill_button, 0, 3, alignment=Qt.AlignRight | Qt.AlignBottom)
 
@@ -97,9 +148,11 @@ class MainWindow(FluentWindow):
         common_layout.setHorizontalSpacing(8)
         common_layout.setVerticalSpacing(8)
 
-        common_layout.addWidget(BodyLabel("公共功能", common_card), 0, 0, 1, 4)
-        self._add_field_row(common_layout, 1, "common_star", "星星数量")
-        self._add_field_row(common_layout, 2, "common_orange", "橘子数量")
+        self.common_section_label = BodyLabel(self._t("section.common"), common_card)
+        common_layout.addWidget(self.common_section_label, 0, 0, 1, 4)
+        self._add_field_row(common_layout, 1, "common_star", "field.common_star")
+        self._add_field_row(common_layout, 2, "common_orange", "field.common_orange")
+        self._add_field_row(common_layout, 3, "common_chocolate", "field.common_chocolate")
 
         layout.addWidget(common_card, 4, 0, 1, 4)
 
@@ -109,11 +162,12 @@ class MainWindow(FluentWindow):
         match_layout.setHorizontalSpacing(8)
         match_layout.setVerticalSpacing(8)
 
-        match_layout.addWidget(BodyLabel("对局修改", match_card), 0, 0, 1, 4)
-        self._add_field_row(match_layout, 1, "dice", "骰子点数")
-        self._add_field_row(match_layout, 2, "round_count", "回合数量")
-        self._add_field_row(match_layout, 3, "attack_dice_left", "攻击骰子-左")
-        self._add_field_row(match_layout, 4, "attack_dice_right", "攻击骰子-右")
+        self.match_section_label = BodyLabel(self._t("section.match"), match_card)
+        match_layout.addWidget(self.match_section_label, 0, 0, 1, 4)
+        self._add_field_row(match_layout, 1, "dice", "field.dice")
+        self._add_field_row(match_layout, 2, "round_count", "field.round_count")
+        self._add_field_row(match_layout, 3, "attack_dice_left", "field.attack_dice_left")
+        self._add_field_row(match_layout, 4, "attack_dice_right", "field.attack_dice_right")
 
         layout.addWidget(match_card, 5, 0, 1, 4)
 
@@ -123,7 +177,8 @@ class MainWindow(FluentWindow):
         players_layout.setHorizontalSpacing(12)
         players_layout.setVerticalSpacing(12)
 
-        players_layout.addWidget(BodyLabel("玩家修改", players_card), 0, 0, 1, 2)
+        self.players_section_label = BodyLabel(self._t("section.players"), players_card)
+        players_layout.addWidget(self.players_section_label, 0, 0, 1, 2)
 
         self._add_player_card(players_layout, 1, 0, 1)
         self._add_player_card(players_layout, 1, 1, 2)
@@ -138,8 +193,10 @@ class MainWindow(FluentWindow):
         tips_layout.setHorizontalSpacing(8)
         tips_layout.setVerticalSpacing(8)
 
-        tips_layout.addWidget(BodyLabel("提示", tips_card), 0, 0)
-        tips_layout.addWidget(BodyLabel("本修改器仅支持 100orange.exe，偏移配置在 config.json 中。", tips_card), 0, 1, 1, 3)
+        self.tips_section_label = BodyLabel(self._t("section.tips"), tips_card)
+        self.tips_body_label = BodyLabel(self._t("tips.only_support"), tips_card)
+        tips_layout.addWidget(self.tips_section_label, 0, 0)
+        tips_layout.addWidget(self.tips_body_label, 0, 1, 1, 3)
 
         layout.addWidget(tips_card, 7, 0, 1, 4)
 
@@ -158,7 +215,7 @@ class MainWindow(FluentWindow):
         )
         scroll_area.setWidgetResizable(True)
         scroll_area.setWidget(page)
-        self.addSubInterface(scroll_area, FIF.GAME, "修改器")
+        self._nav_home_item = self.addSubInterface(scroll_area, FIF.GAME, self._t("nav.home"))
 
         settings_page = self._build_settings_ui()
         settings_scroll = SmoothScrollArea(self)
@@ -176,52 +233,303 @@ class MainWindow(FluentWindow):
         )
         settings_scroll.setWidgetResizable(True)
         settings_scroll.setWidget(settings_page)
-        self.addSubInterface(
+        self._nav_settings_item = self.addSubInterface(
             settings_scroll,
             FIF.SETTING,
-            "设置",
+            self._t("nav.settings"),
             position=NavigationItemPosition.BOTTOM,
         )
+
+    def _t(self, key: str, **kwargs) -> str:
+        return self.i18n.t(key, **kwargs)
+
+    def apply_language(self, language: str) -> None:
+        """运行时切换语言并刷新界面文案。"""
+        if self._applying_language:
+            return
+        self._applying_language = True
+        try:
+            self.i18n = I18n.load(language)
+
+            # window
+            self.setWindowTitle(self._t("app.window_title"))
+
+            # navigation（不同版本 QFluentWidgets API 可能不同，尽量兼容）
+            if not self._set_nav_item_text(self._nav_home_item, self._t("nav.home")):
+                self._try_set_navigation_text("home", self._t("nav.home"))
+            if not self._set_nav_item_text(self._nav_settings_item, self._t("nav.settings")):
+                self._try_set_navigation_text("settings", self._t("nav.settings"))
+
+            # home titles
+            if self.home_title_label is not None:
+                self.home_title_label.setText(self._t("home.title"))
+            if self.home_subtitle_label is not None:
+                self.home_subtitle_label.setText(self._t("home.subtitle"))
+
+            # status label
+            self._refresh_status_text()
+
+            # round
+            self.round_label.setText(self._t("round.label", round=self._current_round))
+
+            # header buttons
+            self.refresh_button.setText(self._t("button.refresh"))
+            self.kill_button.setText(self._t("button.close"))
+
+            # section headers
+            if self.common_section_label is not None:
+                self.common_section_label.setText(self._t("section.common"))
+            if self.match_section_label is not None:
+                self.match_section_label.setText(self._t("section.match"))
+            if self.players_section_label is not None:
+                self.players_section_label.setText(self._t("section.players"))
+            if self.tips_section_label is not None:
+                self.tips_section_label.setText(self._t("section.tips"))
+            if self.tips_body_label is not None:
+                self.tips_body_label.setText(self._t("tips.only_support"))
+
+            # field rows
+            for _, widgets in self._field_widgets.items():
+                widgets.label.setText(self._t(widgets.label_key))
+                widgets.write_button.setText(self._t("button.write"))
+                widgets.lock_button.setText(
+                    self._t("button.locked") if widgets.lock_button.isChecked() else self._t("button.lock")
+                )
+                if not widgets.configured:
+                    widgets.edit.setPlaceholderText(self._t("placeholder.unconfigured"))
+
+            # player card titles + name placeholders
+            for index, label in self._player_title_labels.items():
+                label.setText(self._t("player.title", index=index))
+            for key, edit in self._name_edits.items():
+                if self._is_name_configured(key):
+                    edit.setPlaceholderText(self._t("placeholder.loading"))
+                else:
+                    edit.setPlaceholderText(self._t("placeholder.unconfigured"))
+
+            # settings page
+            if self.settings_title_label is not None:
+                self.settings_title_label.setText(self._t("settings.title"))
+            if self.settings_subtitle_label is not None:
+                self.settings_subtitle_label.setText(self._t("settings.subtitle"))
+            if self.settings_poll_label is not None:
+                self.settings_poll_label.setText(self._t("settings.poll_interval"))
+            if self.settings_language_label is not None:
+                self.settings_language_label.setText(self._t("settings.language"))
+            if self.settings_config_file_label is not None:
+                self.settings_config_file_label.setText(self._t("settings.config_file"))
+            if self.settings_author_label is not None:
+                self.settings_author_label.setText(self._t("settings.author"))
+
+            # 更新语言下拉显示文本（保持索引不变）
+            if hasattr(self, "language_combo") and self.language_combo is not None:
+                self.language_combo.blockSignals(True)
+                try:
+                    for idx in range(self.language_combo.count()):
+                        # 基于稳定的索引映射更新显示文本
+                        code = self._language_codes[idx] if idx < len(self._language_codes) else ""
+                        if code == "zh-CN":
+                            self.language_combo.setItemText(idx, self._t("settings.language.zh_cn"))
+                        elif code == "en-US":
+                            self.language_combo.setItemText(idx, self._t("settings.language.en_us"))
+
+                    # 同步选中项到目标语言
+                    normalized = (language or "zh-CN").strip().replace("_", "-")
+                    if normalized in self._language_codes:
+                        self.language_combo.setCurrentIndex(self._language_codes.index(normalized))
+                finally:
+                    # 防止更新过程中抛异常导致信号被永久屏蔽，出现“第一次能切换，后面无反应”
+                    self.language_combo.blockSignals(False)
+        finally:
+            self._applying_language = False
+
+    def _try_set_navigation_text(self, route_key: str, text: str) -> None:
+        nav = getattr(self, "navigationInterface", None)
+        if nav is None:
+            return
+
+        # 常见方法签名：setItemText(routeKey: str, text: str)
+        for method_name in (
+            "setItemText",
+            "setItemTextByKey",
+            "setItemTitle",
+            "setItemName",
+            "setText",
+        ):
+            method = getattr(nav, method_name, None)
+            if method is None:
+                continue
+            try:
+                method(route_key, text)
+                try:
+                    nav.update()
+                except Exception:
+                    pass
+                return
+            except TypeError:
+                pass
+            except Exception:
+                return
+
+            # 某些实现参数顺序可能是 (text, routeKey)
+            try:
+                method(text, route_key)
+                try:
+                    nav.update()
+                except Exception:
+                    pass
+                return
+            except Exception:
+                pass
+
+        # 兜底：有些版本需要先拿到 item
+        for getter_name in ("item", "getItem", "itemByKey", "getItemByKey"):
+            get_item = getattr(nav, getter_name, None)
+            if get_item is None:
+                continue
+            try:
+                item = get_item(route_key)
+                if item is not None and hasattr(item, "setText"):
+                    item.setText(text)
+                    try:
+                        nav.update()
+                    except Exception:
+                        pass
+                    return
+            except Exception:
+                pass
+
+        # 兜底：尝试遍历 nav 上的子对象，匹配 routeKey/key
+        try:
+            for child in nav.findChildren(QWidget):
+                if hasattr(child, "routeKey") and str(getattr(child, "routeKey")) == route_key and hasattr(child, "setText"):
+                    child.setText(text)
+                    nav.update()
+                    return
+        except Exception:
+            return
+
+    def _set_nav_item_text(self, item, text: str) -> bool:
+        """优先使用 addSubInterface 返回的导航项直接改文案。"""
+        if item is None:
+            return False
+        for attr in ("setText", "setTitle", "setName"):
+            setter = getattr(item, attr, None)
+            if setter is None:
+                continue
+            try:
+                setter(text)
+                return True
+            except Exception:
+                return False
+        return False
+
+    def _set_status_state(self, state: str) -> None:
+        self._status_state = state
+        self._refresh_status_text()
+
+    def _refresh_status_text(self) -> None:
+        if not hasattr(self, "status_label") or self.status_label is None:
+            return
+        if self._status_state == "detected":
+            self.status_label.setText(self._t("status.detected"))
+        elif self._status_state == "waiting":
+            self.status_label.setText(self._t("status.waiting"))
+        else:
+            self.status_label.setText(self._t("status.detached"))
 
     def _build_settings_ui(self) -> QWidget:
         page = QWidget(self)
         page.setStyleSheet("background: transparent;")
         page.setObjectName("settings")
-        layout = QGridLayout(page)
+        layout = QVBoxLayout(page)
         layout.setContentsMargins(24, 24, 24, 24)
-        layout.setHorizontalSpacing(16)
-        layout.setVerticalSpacing(12)
+        layout.setSpacing(12)
 
-        title = TitleLabel("设置", page)
-        subtitle = SubtitleLabel("刷新频率与配置路径", page)
-        layout.addWidget(title, 0, 0, 1, 4)
-        layout.addWidget(subtitle, 1, 0, 1, 4)
+        self.settings_title_label = TitleLabel(self._t("settings.title"), page)
+        self.settings_subtitle_label = SubtitleLabel(self._t("settings.subtitle"), page)
+        layout.addWidget(self.settings_title_label)
+        layout.addWidget(self.settings_subtitle_label)
 
         settings_card = CardWidget(page)
+        settings_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         settings_layout = QGridLayout(settings_card)
         settings_layout.setContentsMargins(16, 16, 16, 16)
         settings_layout.setHorizontalSpacing(8)
         settings_layout.setVerticalSpacing(8)
+        settings_layout.setColumnStretch(0, 0)
+        settings_layout.setColumnStretch(1, 1)
+        settings_layout.setColumnStretch(2, 0)
 
-        settings_layout.addWidget(BodyLabel("刷新间隔(ms)", settings_card), 0, 0)
+        self.settings_poll_label = BodyLabel(self._t("settings.poll_interval"), settings_card)
+        settings_layout.addWidget(self.settings_poll_label, 0, 0)
         self.poll_interval_edit = LineEdit(settings_card)
         self.poll_interval_edit.setValidator(QIntValidator(50, 5000, self))
         self.poll_interval_edit.setText(str(self.config.poll_interval_ms))
+        self.poll_interval_edit.setMaximumWidth(160)
+        # 自动保存：输入变化后防抖保存，失焦也会触发一次
+        self.poll_interval_edit.textChanged.connect(self._schedule_settings_autosave)
+        self.poll_interval_edit.editingFinished.connect(self._auto_save_settings)
         settings_layout.addWidget(self.poll_interval_edit, 0, 1)
 
-        self.save_settings_button = PushButton("保存设置", settings_card)
-        self.save_settings_button.clicked.connect(self._save_settings)
-        settings_layout.addWidget(self.save_settings_button, 0, 2)
+        self.settings_language_label = BodyLabel(self._t("settings.language"), settings_card)
+        settings_layout.addWidget(self.settings_language_label, 1, 0)
+        self.language_combo = ComboBox(settings_card)
+        self.language_combo.setMaximumWidth(200)
+        # 只用显示文本 + 稳定索引映射，避免不同 ComboBox 实现对 userData 支持不一致
+        self.language_combo.addItem(self._t("settings.language.zh_cn"))
+        self.language_combo.addItem(self._t("settings.language.en_us"))
 
-        settings_layout.addWidget(BodyLabel("配置文件", settings_card), 1, 0)
-        settings_layout.addWidget(BodyLabel(str(self.config_path()), settings_card), 1, 1, 1, 2)
+        current_lang = (self.config.language or "zh-CN").strip().replace("_", "-")
+        if current_lang in self._language_codes:
+            self.language_combo.setCurrentIndex(self._language_codes.index(current_lang))
 
-        settings_layout.addWidget(BodyLabel("作者", settings_card), 2, 0)
-        settings_layout.addWidget(BodyLabel("localhosts-A", settings_card), 2, 1, 1, 2)
+        # 双保险：不同版本可能只发其中一种信号
+        self.language_combo.currentIndexChanged.connect(self._on_language_changed)
+        if hasattr(self.language_combo, "currentTextChanged"):
+            self.language_combo.currentTextChanged.connect(self._on_language_changed)
+        settings_layout.addWidget(self.language_combo, 1, 1)
 
-        layout.addWidget(settings_card, 2, 0, 1, 4)
+        self.settings_config_file_label = BodyLabel(self._t("settings.config_file"), settings_card)
+        settings_layout.addWidget(self.settings_config_file_label, 2, 0)
+        config_path_label = BodyLabel(str(self.config_path()), settings_card)
+        config_path_label.setWordWrap(True)
+        config_path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        config_path_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        settings_layout.addWidget(config_path_label, 2, 1, 1, 2)
+
+        self.settings_author_label = BodyLabel(self._t("settings.author"), settings_card)
+        settings_layout.addWidget(self.settings_author_label, 3, 0)
+        settings_layout.addWidget(BodyLabel("localhosts-A", settings_card), 3, 1, 1, 2)
+
+        layout.addWidget(settings_card)
+        layout.addStretch(1)
 
         return page
+
+    def _on_language_changed(self, *_args) -> None:
+        if self._applying_language:
+            return
+
+        idx = int(self.language_combo.currentIndex())
+        selected_lang = self._language_codes[idx] if 0 <= idx < len(self._language_codes) else "zh-CN"
+        self.config.language = selected_lang
+        self.apply_language(selected_lang)
+        # 语言切换通常期望下次启动仍然生效，这里直接持久化（不弹提示，避免打扰）
+        try:
+            self.config.save()
+        except Exception:
+            pass
+
+    def _schedule_settings_autosave(self) -> None:
+        """设置变更后触发防抖自动保存。"""
+        if self._applying_language:
+            # 语言应用过程中会批量改动文本，避免误触
+            return
+        self._settings_autosave_timer.start()
+
+    def _auto_save_settings(self) -> None:
+        self._save_settings(silent=True)
 
     def _attempt_attach(self, silent: bool) -> None:
         if self.memory.attached:
@@ -230,29 +538,37 @@ class MainWindow(FluentWindow):
         self.memory.module_name = self.config.module_name
         try:
             self.memory.attach()
-            self.status_label.setText("状态：已检测到游戏")
+            self._set_status_state("detected")
             self.status_label.setStyleSheet("color: #2d7d46;")
             if not silent:
-                InfoBar.success("成功", "进程附加成功", parent=self, position=InfoBarPosition.TOP)
+                InfoBar.success(
+                    self._t("infobar.success"),
+                    self._t("msg.attach_success"),
+                    parent=self,
+                    position=InfoBarPosition.TOP,
+                )
         except Exception:
-            self.status_label.setText("状态：等待游戏启动")
+            self._set_status_state("waiting")
             self.status_label.setStyleSheet("color: #cf000f;")
 
-    def _add_field_row(self, layout: QGridLayout, row: int, key: str, label: str) -> None:
-        label_widget = BodyLabel(label, self)
+    def _add_field_row(self, layout: QGridLayout, row: int, key: str, label_key: str) -> None:
+        label_widget = BodyLabel(self._t(label_key), self)
         edit = LineEdit(self)
         edit.setValidator(QIntValidator(0, 2 ** 31 - 1, self))
         edit.setText("0")
-        write_button = PushButton("写入", self)
+        write_button = PushButton(self._t("button.write"), self)
         write_button.clicked.connect(lambda: self.write_field_value(key))
-        lock_button = PushButton("锁定", self)
+        lock_button = PushButton(self._t("button.lock"), self)
         lock_button.setCheckable(True)
         lock_button.setChecked(False)
         lock_button.clicked.connect(lambda checked: self._toggle_lock_state(checked, lock_button))
 
+        configured = True
+
         if not self._is_key_configured(key):
+            configured = False
             edit.clear()
-            edit.setPlaceholderText("未配置")
+            edit.setPlaceholderText(self._t("placeholder.unconfigured"))
             edit.setReadOnly(True)
             write_button.setEnabled(False)
             lock_button.setEnabled(False)
@@ -262,10 +578,10 @@ class MainWindow(FluentWindow):
         layout.addWidget(write_button, row, 2)
         layout.addWidget(lock_button, row, 3)
 
-        self._field_widgets[key] = FieldWidgets(label_widget, edit, write_button, lock_button)
+        self._field_widgets[key] = FieldWidgets(label_key, label_widget, edit, write_button, lock_button, configured)
 
     def _toggle_lock_state(self, checked: bool, button: PushButton) -> None:
-        button.setText("已锁定" if checked else "锁定")
+        button.setText(self._t("button.locked") if checked else self._t("button.lock"))
 
     def _add_player_card(self, layout: QGridLayout, row: int, col: int, player_index: int) -> None:
         card = CardWidget(self)
@@ -275,10 +591,15 @@ class MainWindow(FluentWindow):
         card_layout.setVerticalSpacing(6)
 
         name_key = f"player{player_index}_name"
-        name_label = BodyLabel(f"玩家 {player_index}", card)
+        name_label = BodyLabel(self._t("player.title", index=player_index), card)
+        self._player_title_labels[player_index] = name_label
         name_edit = LineEdit(card)
         name_edit.setReadOnly(True)
-        name_edit.setPlaceholderText("读取中..." if self._is_name_configured(name_key) else "未配置")
+        name_edit.setPlaceholderText(
+            self._t("placeholder.loading")
+            if self._is_name_configured(name_key)
+            else self._t("placeholder.unconfigured")
+        )
         if not self._is_name_configured(name_key):
             name_edit.setReadOnly(True)
         self._name_edits[name_key] = name_edit
@@ -286,9 +607,9 @@ class MainWindow(FluentWindow):
         card_layout.addWidget(name_label, 0, 0)
         card_layout.addWidget(name_edit, 0, 1, 1, 3)
 
-        self._add_field_row(card_layout, 1, f"player{player_index}_hp", "HP")
-        self._add_field_row(card_layout, 2, f"player{player_index}_win", "胜利次数")
-        self._add_field_row(card_layout, 3, f"player{player_index}_star", "星数")
+        self._add_field_row(card_layout, 1, f"player{player_index}_hp", "field.hp")
+        self._add_field_row(card_layout, 2, f"player{player_index}_win", "field.win")
+        self._add_field_row(card_layout, 3, f"player{player_index}_star", "field.star")
 
         layout.addWidget(card, row, col)
 
@@ -303,6 +624,7 @@ class MainWindow(FluentWindow):
             if not self.memory.attached:
                 return
 
+        had_error = False
         for key, widgets in self._field_widgets.items():
             try:
                 address = self._resolve_address(key)
@@ -314,32 +636,58 @@ class MainWindow(FluentWindow):
                 value = self.memory.read_int(address)
                 self._set_input_placeholder(widgets.edit, str(value))
                 if key == "round_count":
-                    self.round_label.setText(f"当前回合：第{value}回合")
+                    self._current_round = int(value)
+                    self.round_label.setText(self._t("round.label", round=self._current_round))
             except Exception:
-                widgets.edit.setText("0")
-                self.memory.detach()
-                self.status_label.setText("状态：等待游戏启动")
-                self.status_label.setStyleSheet("color: #cf000f;")
-                return
+                had_error = True
+                # 未进入对局时，部分指针/偏移可能不可读；此处不要直接断开附加。
+                # 仅当进程确实退出时才 detach。
+                self._set_input_placeholder(widgets.edit, "0")
+
+        if had_error and self.memory.attached and not self.memory.is_alive():
+            self.memory.detach()
+            self._set_status_state("waiting")
+            self.status_label.setStyleSheet("color: #cf000f;")
+            return
 
         self._refresh_player_names()
 
     def write_field_value(self, key: str) -> None:
         if not self.memory.attached:
-            InfoBar.warning("提示", "请先附加进程", parent=self, position=InfoBarPosition.TOP)
+            InfoBar.warning(
+                self._t("infobar.warning"),
+                self._t("msg.please_attach"),
+                parent=self,
+                position=InfoBarPosition.TOP,
+            )
             return
         widgets = self._field_widgets[key]
         try:
             text = widgets.edit.text().strip()
             if not text:
-                InfoBar.warning("提示", "请输入要写入的数值", parent=self, position=InfoBarPosition.TOP)
+                InfoBar.warning(
+                    self._t("infobar.warning"),
+                    self._t("msg.enter_value"),
+                    parent=self,
+                    position=InfoBarPosition.TOP,
+                )
                 return
             value = int(text)
             address = self._resolve_address(key)
             self._write_value(key, address, value)
-            InfoBar.success("成功", "写入完成", parent=self, position=InfoBarPosition.TOP)
+            InfoBar.success(
+                self._t("infobar.success"),
+                self._t("msg.write_done"),
+                parent=self,
+                position=InfoBarPosition.TOP,
+            )
         except Exception as exc:  # noqa: BLE001
-            InfoBar.error("错误", f"写入失败：{exc}", parent=self, position=InfoBarPosition.TOP)
+            InfoBar.error(
+                self._t("infobar.error"),
+                self._t("msg.write_failed", error=exc),
+                parent=self,
+                position=InfoBarPosition.TOP,
+            )
 
     def _set_input_placeholder(self, edit: LineEdit, value_text: str) -> None:
         if edit.hasFocus() and edit.text().strip():
@@ -533,15 +881,55 @@ class MainWindow(FluentWindow):
     def _is_name_configured(self, key: str) -> bool:
         return self._resolve_name_config(key) is not None
 
-    def _save_settings(self) -> None:
+    def _save_settings(self, silent: bool = False) -> None:
+        """保存设置。
+
+        - silent=True：自动保存，不弹出提示，避免频繁打扰。
+        - silent=False：手动保存，提示保存结果。
+        """
         try:
-            interval = int(self.poll_interval_edit.text())
-            self.config.poll_interval_ms = interval
-            self.timer.setInterval(interval)
+            text = self.poll_interval_edit.text().strip()
+            if not text:
+                return
+            interval = int(text)
+            # validator 已限制范围，这里再兜底一次
+            interval = max(50, min(5000, interval))
+
+            idx = int(self.language_combo.currentIndex())
+            language = self._language_codes[idx] if 0 <= idx < len(self._language_codes) else "zh-CN"
+
+            changed = False
+            if interval != int(self.config.poll_interval_ms):
+                self.config.poll_interval_ms = interval
+                self.timer.setInterval(interval)
+                changed = True
+
+            if language != (self.config.language or "zh-CN"):
+                self.config.language = language
+                changed = True
+
+            # 避免频繁写盘：无变化则直接返回
+            if not changed and interval == self._last_saved_poll_interval_ms:
+                return
+
             self.config.save()
-            InfoBar.success("成功", "设置已保存", parent=self, position=InfoBarPosition.TOP)
+            self._last_saved_poll_interval_ms = interval
+
+            if not silent:
+                InfoBar.success(
+                    self._t("infobar.success"),
+                    self._t("msg.settings_saved"),
+                    parent=self,
+                    position=InfoBarPosition.TOP,
+                )
         except Exception as exc:  # noqa: BLE001
-            InfoBar.error("错误", f"保存失败：{exc}", parent=self, position=InfoBarPosition.TOP)
+            if not silent:
+                InfoBar.error(
+                    self._t("infobar.error"),
+                    self._t("msg.settings_save_failed", error=exc),
+                    parent=self,
+                    position=InfoBarPosition.TOP,
+                )
 
     def config_path(self) -> str:
         from .config import CONFIG_PATH
@@ -550,26 +938,58 @@ class MainWindow(FluentWindow):
 
     def _confirm_kill_process(self) -> None:
         if not self.memory.attached:
-            InfoBar.warning("提示", "未检测到游戏进程", parent=self, position=InfoBarPosition.TOP)
+            InfoBar.warning(
+                self._t("infobar.warning"),
+                self._t("msg.no_process"),
+                parent=self,
+                position=InfoBarPosition.TOP,
+            )
             return
-        reply = QMessageBox.question(
-            self,
-            "确认关闭",
-            "确定要关闭游戏进程吗？",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if reply == QMessageBox.Yes:
+
+        dialog = Dialog(self._t("dialog.kill_title"), self._t("dialog.kill_text"), self)
+        # 部分版本暴露 yesButton/cancelButton，可选设置文案
+        try:
+            if hasattr(dialog, "yesButton"):
+                dialog.yesButton.setText(self._t("button.yes"))
+            if hasattr(dialog, "cancelButton"):
+                dialog.cancelButton.setText(self._t("button.no"))
+        except Exception:
+            pass
+
+        try:
+            accepted = bool(dialog.exec())
+        except Exception:
+            # 兜底：若 Dialog API 变化，退回系统消息框
+            reply = QMessageBox.question(
+                self,
+                self._t("dialog.kill_title"),
+                self._t("dialog.kill_text"),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            accepted = reply == QMessageBox.Yes
+
+        if accepted:
             self._kill_process()
 
     def _kill_process(self) -> None:
         try:
             self.memory.terminate()
-            self.status_label.setText("状态：等待游戏启动")
+            self._set_status_state("waiting")
             self.status_label.setStyleSheet("color: #cf000f;")
-            InfoBar.success("成功", "已关闭游戏进程", parent=self, position=InfoBarPosition.TOP)
+            InfoBar.success(
+                self._t("infobar.success"),
+                self._t("msg.kill_done"),
+                parent=self,
+                position=InfoBarPosition.TOP,
+            )
         except Exception as exc:  # noqa: BLE001
-            InfoBar.error("错误", f"关闭失败：{exc}", parent=self, position=InfoBarPosition.TOP)
+            InfoBar.error(
+                self._t("infobar.error"),
+                self._t("msg.kill_failed", error=exc),
+                parent=self,
+                position=InfoBarPosition.TOP,
+            )
 
 
 class SmoothScrollArea(ScrollArea):

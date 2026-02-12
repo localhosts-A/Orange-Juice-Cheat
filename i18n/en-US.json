@@ -1,0 +1,74 @@
+{
+  "nav.home": "Trainer",
+  "nav.settings": "Settings",
+
+  "app.window_title": "100% Orange Juice Trainer",
+
+  "home.title": "100% Orange Juice Trainer",
+  "home.subtitle": "Single-player only. Use at your own risk.",
+
+  "status.detached": "Status: not attached",
+  "status.detected": "Status: game detected",
+  "status.waiting": "Status: waiting for game",
+
+  "round.label": "Round: {round}",
+
+  "button.refresh": "Refresh",
+  "button.close": "Close",
+  "button.write": "Write",
+  "button.lock": "Lock",
+  "button.locked": "Locked",
+  "button.yes": "OK",
+  "button.no": "Cancel",
+
+  "section.common": "Common",
+  "section.match": "Match",
+  "section.players": "Players",
+  "section.tips": "Tips",
+  "tips.only_support": "This trainer only supports 100orange.exe. Offsets are in config.json.",
+
+  "field.common_star": "Stars",
+  "field.common_orange": "Oranges",
+  "field.common_chocolate": "Chocolates",
+  "field.dice": "Dice",
+  "field.round_count": "Round count",
+  "field.attack_dice_left": "ATK dice (L)",
+  "field.attack_dice_right": "ATK dice (R)",
+  "field.hp": "HP",
+  "field.win": "Wins",
+  "field.star": "Stars",
+
+  "player.title": "Player {index}",
+
+  "placeholder.loading": "Loading...",
+  "placeholder.unconfigured": "Not configured",
+
+  "settings.title": "Settings",
+  "settings.subtitle": "Refresh rate and config path",
+  "settings.poll_interval": "Refresh interval (ms)",
+  "settings.language": "Language",
+  "settings.language.zh_cn": "简体中文",
+  "settings.language.en_us": "English",
+  "settings.save": "Save",
+  "settings.config_file": "Config file",
+  "settings.author": "Author",
+
+  "infobar.success": "Success",
+  "infobar.warning": "Notice",
+  "infobar.error": "Error",
+
+  "msg.attach_success": "Attached successfully",
+  "msg.please_attach": "Please attach first",
+  "msg.enter_value": "Please enter a value",
+  "msg.write_done": "Write completed",
+  "msg.write_failed": "Write failed: {error}",
+  "msg.settings_saved": "Settings saved",
+  "msg.settings_save_failed": "Save failed: {error}",
+  "msg.restart_required": "Language will take effect after restart",
+
+  "msg.no_process": "Game process not detected",
+  "dialog.kill_title": "Confirm",
+  "dialog.kill_text": "Are you sure you want to terminate the game process?",
+  "msg.kill_done": "Game process terminated",
+  "msg.kill_failed": "Terminate failed: {error}"
+}

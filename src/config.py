@@ -24,6 +24,7 @@ class AppConfig:
     win_stride: int
     star_stride: int
     poll_interval_ms: int
+    language: str
 
     @staticmethod
     def load() -> "AppConfig":
@@ -60,6 +61,7 @@ class AppConfig:
             win_stride=int(str(data.get("win_stride", "0x0")), 16),
             star_stride=int(str(data.get("star_stride", "0x0")), 16),
             poll_interval_ms=int(data.get("poll_interval_ms", 300)),
+            language=str(data.get("language", "zh-CN")),
         )
 
     def save(self) -> None:
@@ -90,5 +92,6 @@ class AppConfig:
             "win_stride": hex(self.win_stride),
             "star_stride": hex(self.star_stride),
             "poll_interval_ms": self.poll_interval_ms,
+            "language": self.language,
         }
         CONFIG_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")

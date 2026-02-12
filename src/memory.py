@@ -49,6 +49,23 @@ class ProcessMemory:
         finally:
             self.detach()
 
+    def is_alive(self) -> bool:
+        """Return True if the attached process is still running."""
+        if self._pm is None or not getattr(self._pm, "process_handle", None):
+            return False
+        try:
+            STILL_ACTIVE = 259
+            exit_code = ctypes.c_ulong(0)
+            ok = ctypes.windll.kernel32.GetExitCodeProcess(
+                self._pm.process_handle,
+                ctypes.byref(exit_code),
+            )
+            if ok == 0:
+                return False
+            return int(exit_code.value) == STILL_ACTIVE
+        except Exception:
+            return False
+
     def get_address(self, base_offset: int, field_offset: int) -> int:
         if not self.attached:
             raise RuntimeError("Process not attached")
